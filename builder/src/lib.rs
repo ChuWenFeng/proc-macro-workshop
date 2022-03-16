@@ -24,6 +24,7 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let builder_struct_fields_def = generate_builder_struct_fields_def(fields)?;
     let builder_struct_factory_init_clauses = generate_builder_struct_factory_init_clauses(fields)?;
 
+    let setter_functions = generate_setter_functions(fields)?;
 
     let ret = quote! {     
         pub struct #builder_name_ident {                  
@@ -34,8 +35,11 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 #builder_name_ident{
                     #(#builder_struct_factory_init_clauses),*
                 }
-            }                                                                               
-        }                                                  
+            } 
+        }      
+        impl #builder_name_ident{
+            #setter_functions                                                                           
+        }                                            
     };                    
 
     return Ok(ret);
@@ -73,4 +77,20 @@ fn generate_builder_struct_factory_init_clauses(fields: &StructFields) -> syn::R
         }
     }).collect();
     Ok(init_clauses)
+}
+
+fn generate_setter_functions(fields: &StructFields) -> syn::Result<proc_macro2::TokenStream>{
+    let idents_types:Vec<_> = fields.iter().map(|f|(&f.ident,&f.ty)).collect();
+    let mut final_tokenstream = proc_macro2::TokenStream::new();
+
+    for (ident,type_) in idents_types{
+        let token_s = quote! {
+            pub fn #ident (&mut self,input: #type_) -> &mut Self{
+                self.#ident = std::option::Option::Some(input);
+                self
+            }
+        };
+        final_tokenstream.extend(token_s);
+    }   
+    Ok(final_tokenstream)
 }
