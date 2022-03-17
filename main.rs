@@ -1,11 +1,3 @@
-// Write code here.
-//
-// To see what the code looks like after macro expansion:
-//     $ cargo expand
-//
-// To run the code:
-//     $ cargo run
-
 use derive_builder::Builder;
 
 #[derive(Builder)]
@@ -22,4 +14,7 @@ fn main() {
     builder.args(vec!["build".to_owned(), "--release".to_owned()]);
     builder.env(vec![]);
     builder.current_dir("..".to_owned());
+
+    let command = builder.build().unwrap();
+    assert_eq!(command.executable, "cargo");
 }

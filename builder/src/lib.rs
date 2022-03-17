@@ -25,6 +25,7 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let builder_struct_factory_init_clauses = generate_builder_struct_factory_init_clauses(fields)?;
 
     let setter_functions = generate_setter_functions(fields)?;
+    let generated_builder_functions = generate_build_function(fields,struct_ident)?;
 
     let ret = quote! {     
         pub struct #builder_name_ident {                  
@@ -38,7 +39,9 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             } 
         }      
         impl #builder_name_ident{
-            #setter_functions                                                                           
+            #setter_functions
+
+            #generated_builder_functions                                                                     
         }                                            
     };                    
 
@@ -93,4 +96,42 @@ fn generate_setter_functions(fields: &StructFields) -> syn::Result<proc_macro2::
         final_tokenstream.extend(token_s);
     }   
     Ok(final_tokenstream)
+}
+
+fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ident) -> syn::Result<proc_macro2::TokenStream>{
+
+    let idents:Vec<_> = fields.iter().map(|f|&f.ident).collect();
+    let mut checker_code_pieces = Vec::new();
+
+    for idx in 0..idents.len(){
+        let ident = idents[idx];
+        checker_code_pieces.push(quote!{
+            if self.#ident.is_none(){
+                let err = format!("{} field missing",stringify!(#ident));
+                return std::result::Result::Err(err.into())
+            }
+        });
+    }
+
+    let mut fill_result_clauses = Vec::new();
+    for idx in 0..idents.len(){
+        let ident = idents[idx];
+        fill_result_clauses.push(quote!{
+            #ident: self.#ident.clone().unwrap()
+        });
+    }
+
+    let token_stream = quote! {
+        pub fn build(&mut self)-> std::result::Result<#origin_struct_ident,std::boxed::Box<dyn std::error::Error>>{
+            #(#checker_code_pieces)*
+
+            let ret = #origin_struct_ident{
+                #(#fill_result_clauses),*
+            };
+            std::result::Result::Ok(ret)
+        }
+    };
+
+    Ok(token_stream)
+
 }
