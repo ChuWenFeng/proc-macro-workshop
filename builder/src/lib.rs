@@ -221,6 +221,7 @@ fn get_generic_inner_type<'a>(ty:&'a syn::Type,outer_ident_name:&str)->Option<&'
 
 fn get_user_specified_ident_for_vec(field:&syn::Field)-> syn::Result<Option<syn::Ident>>{
     for attr in &field.attrs{
+        // eprintln!("{:#?}",attr.parse_meta());
         if let Ok(syn::Meta::List(syn::MetaList{
             ref path,
             ref nested,
