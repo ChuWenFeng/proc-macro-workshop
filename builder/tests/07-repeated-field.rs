@@ -31,7 +31,7 @@
 
 use derive_builder::Builder;
 
-#[derive(Builder,attributes(builder))]
+#[derive(Builder)]
 pub struct Command {
     executable: String,
     #[builder(each = "arg")]
