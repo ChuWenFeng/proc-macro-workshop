@@ -21,6 +21,7 @@ fn do_expand(st: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let struct_ident = &st.ident;  // 模板代码中不可以使用`.`来访问结构体成员，所以要在模板代码外面将标识符放到一个独立的变量中
 
     let fields = get_fields_from_derive_input(st)?;
+    // eprintln!("{:#?}",fields);
     let builder_struct_fields_def = generate_builder_struct_fields_def(fields)?;
     let builder_struct_factory_init_clauses = generate_builder_struct_factory_init_clauses(fields)?;
 
@@ -64,9 +65,16 @@ fn get_fields_from_derive_input(d:&syn::DeriveInput)->syn::Result<&StructFields>
 
 fn generate_builder_struct_fields_def(fields: &StructFields) -> syn::Result<proc_macro2::TokenStream>{
     let idents:Vec<_> = fields.iter().map(|f| {&f.ident}).collect();
-    let types:Vec<_> = fields.iter().map(|f|{&f.ty}).collect();
+    let types:Vec<_> = fields.iter().map(|f|{
+        if let Some(inner_ty) = get_optional_inner_type(&f.ty) {
+            quote!(std::option::Option<#inner_ty>)
+        } else {
+            let origin_ty = &f.ty;
+            quote!(std::option::Option<#origin_ty>)
+        }
+    }).collect();
     let token_stream = quote!{
-        #(#idents: std::option::Option<#types>),*
+        #(#idents: #types),*
     };
 
     Ok(token_stream)
@@ -87,12 +95,23 @@ fn generate_setter_functions(fields: &StructFields) -> syn::Result<proc_macro2::
     let mut final_tokenstream = proc_macro2::TokenStream::new();
 
     for (ident,type_) in idents_types{
-        let token_s = quote! {
-            pub fn #ident (&mut self,input: #type_) -> &mut Self{
-                self.#ident = std::option::Option::Some(input);
-                self
+        let token_s;
+        if let Some(inner_ty) = get_optional_inner_type(type_){
+            token_s = quote!{
+                fn #ident(&mut self,input: #inner_ty)->&mut Self{ 
+                    self.#ident = std::option::Option::Some(input);
+                    self
+                }
             }
-        };
+        }else{
+            token_s = quote! {
+                pub fn #ident (&mut self,input: #type_) -> &mut Self{
+                    self.#ident = std::option::Option::Some(input);
+                    self
+                }
+            };
+        }
+        
         final_tokenstream.extend(token_s);
     }   
     Ok(final_tokenstream)
@@ -101,24 +120,36 @@ fn generate_setter_functions(fields: &StructFields) -> syn::Result<proc_macro2::
 fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ident) -> syn::Result<proc_macro2::TokenStream>{
 
     let idents:Vec<_> = fields.iter().map(|f|&f.ident).collect();
+    let types:Vec<_> = fields.iter().map(|f|&f.ty).collect();
     let mut checker_code_pieces = Vec::new();
 
     for idx in 0..idents.len(){
         let ident = idents[idx];
-        checker_code_pieces.push(quote!{
-            if self.#ident.is_none(){
-                let err = format!("{} field missing",stringify!(#ident));
-                return std::result::Result::Err(err.into())
-            }
-        });
+        let type_ = types[idx];
+        if get_optional_inner_type(type_).is_none(){
+            checker_code_pieces.push(quote!{
+                if self.#ident.is_none(){
+                    let err = format!("{} field missing",stringify!(#ident));
+                    return std::result::Result::Err(err.into())
+                }
+            });
+        }
+        
     }
 
     let mut fill_result_clauses = Vec::new();
     for idx in 0..idents.len(){
         let ident = idents[idx];
-        fill_result_clauses.push(quote!{
-            #ident: self.#ident.clone().unwrap()
-        });
+        if get_optional_inner_type(types[idx]).is_none(){
+            fill_result_clauses.push(quote!{
+                #ident: self.#ident.clone().unwrap()
+            });
+        }else{
+            fill_result_clauses.push(quote!{
+                #ident:self.#ident.clone()
+            });
+        }
+        
     }
 
     let token_stream = quote! {
@@ -134,4 +165,22 @@ fn generate_build_function(fields: &StructFields, origin_struct_ident: &syn::Ide
 
     Ok(token_stream)
 
+}
+
+fn get_optional_inner_type(ty:&syn::Type)->Option<&syn::Type>{
+    if let syn::Type::Path(syn::TypePath{ref path,..}) = ty{
+        if let Some(seg) = path.segments.last(){
+            if seg.ident == "Option"{
+                if let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments{
+                    ref args,
+                    ..
+                }) = seg.arguments{
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.first(){
+                        return Some(inner_ty);
+                    }
+                }
+            }
+        }
+    }                       
+    None
 }
