@@ -21,7 +21,7 @@ fn do_expand(st:&syn::DeriveInput)->syn::Result<proc_macro2::TokenStream>{
 
 type StructFields = syn::punctuated::Punctuated<syn::Field,syn::Token!(,)>;
 
-fn get_field_from_derive_input(d:&syn::DeriveInput)->syn::Result<&StructFields>{
+fn get_fields_from_derive_input(d:&syn::DeriveInput)->syn::Result<&StructFields>{
     if let syn::Data::Struct(syn::DataStruct{
         fields: syn::Fields::Named(syn::FieldsNamed{ref named,..}),
         ..
@@ -32,7 +32,7 @@ fn get_field_from_derive_input(d:&syn::DeriveInput)->syn::Result<&StructFields>{
 }
 
 fn generate_debug_trait(st:&syn::DeriveInput)-> syn::Result<proc_macro2::TokenStream>{
-    let fields = get_field_from_derive_input(st)?;
+    let fields = get_fields_from_derive_input(st)?;
     let struct_name_ident = &st.ident;
 
     let struct_name_literal = struct_name_ident.to_string();
@@ -61,8 +61,26 @@ fn generate_debug_trait(st:&syn::DeriveInput)-> syn::Result<proc_macro2::TokenSt
     ));
 
     let mut generic_param_to_modify = st.generics.clone();
-    for mut g in generic_param_to_modify.params.iter_mut(){
+
+    let mut field_type_names = Vec::new();
+    let mut phantomdata_type_param_names = Vec::new();
+
+    for field in fields{
+        if let Some(s) = get_field_type_name(field)?{
+            field_type_names.push(s);
+        }
+        if let Some(s) = get_phantomdata_generic_type_name(field)?{
+            phantomdata_type_param_names.push(s);
+        }
+    }
+
+    for g in generic_param_to_modify.params.iter_mut(){
         if let syn::GenericParam::Type(t) = g{
+            let type_param_name = t.ident.to_string();
+            if phantomdata_type_param_names.contains(&type_param_name) && !field_type_names.contains(&type_param_name){
+                continue;
+            }
+
             t.bounds.push(parse_quote!(std::fmt::Debug));
         }
     }
@@ -95,4 +113,30 @@ fn get_custom_format_of_field(field:&syn::Field)->syn::Result<Option<String>>{
     }
 
     Ok(None)
+}
+
+fn get_phantomdata_generic_type_name(field: &syn::Field) -> syn::Result<Option<String>> {
+    if let syn::Type::Path(syn::TypePath{path: syn::Path{ref segments,..},..}) = field.ty{
+        if let Some(syn::PathSegment{ref ident,ref arguments}) = segments.last(){
+            if ident == "PhantomData"{
+                if let syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments{args,..}) = arguments{
+                    if let Some(syn::GenericArgument::Type(syn::Type::Path(ref gp))) = args.first(){
+                        if let Some(generic_ident) = gp.path.segments.first(){
+                            return Ok(Some(generic_ident.ident.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return Ok(None);
+}
+
+fn get_field_type_name(field:&syn::Field)-> syn::Result<Option<String>>{
+    if let syn::Type::Path(syn::TypePath{path: syn::Path{ref segments,..},..}) = field.ty{
+        if let Some(syn::PathSegment{ref ident,..}) = segments.last(){
+            return Ok(Some(ident.to_string()));
+        }
+    }
+    return Ok(None);
 }
