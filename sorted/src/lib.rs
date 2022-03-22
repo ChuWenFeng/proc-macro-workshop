@@ -128,7 +128,7 @@ impl syn::visit_mut::VisitMut for MatchVisitor{
             let mut sorted_names = match_arm_names.clone();
             sorted_names.sort_by(|a,b|{a.0.cmp(&b.0)});
             for (idx,(a,b)) in match_arm_names.iter().zip(sorted_names.iter()).enumerate() {
-                if a.0 == "_".to_string() && idx != match_arm_names.len(){
+                if a.0 == "_".to_string() && idx != match_arm_names.len()-1{
                     self.err = Some(syn::Error::new_spanned(a.1, "\"_\" should be last one"));
                     return;
                 }
