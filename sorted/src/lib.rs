@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::ToTokens;
-use syn::{visit_mut::VisitMut, token::Underscore};
+use syn::{visit_mut::VisitMut};
 
 #[proc_macro_attribute]
 pub fn sorted(_args: TokenStream, input: TokenStream) -> TokenStream {
