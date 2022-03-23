@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet};
 
 use proc_macro::TokenStream;
 use quote::ToTokens;
@@ -39,7 +39,6 @@ fn impl_user_define_bit_width(st: &mut syn::ItemStruct)->syn::Result<proc_macro2
             const BITS:u8;
         }
     });
-    // let struct_name = st.ident.to_string();
     let mut struct_visit = StructVisitor::new();
     
     struct_visit.visit_item_struct_mut(st);
@@ -48,7 +47,7 @@ fn impl_user_define_bit_width(st: &mut syn::ItemStruct)->syn::Result<proc_macro2
         return syn::Result::Err(e);
     }
     let mut fields_ty = HashSet::new();
-    for (_,ty_size) in struct_visit.fields_seq{
+    for (_,ty_size,_) in struct_visit.fields_seq.iter(){
         fields_ty.insert(ty_size);
     }
 
@@ -62,6 +61,28 @@ fn impl_user_define_bit_width(st: &mut syn::ItemStruct)->syn::Result<proc_macro2
             }
         })
     }
+    let st_vis = st.vis.clone();
+    let st_token = st.struct_token.clone();
+    let st_ident = st.ident.clone();
+    let st_size = struct_visit.size / 8;
+
+    token_stream.extend(quote::quote! {
+        #st_vis #st_token #st_ident {
+            data: [u8;#st_size],
+        }
+    });
+
+    let fn_impl_token =  impl_st_fn_geter_seter(&struct_visit)?;
+    token_stream.extend(quote::quote!{
+        impl #st_ident{
+
+            pub fn new()->Self{
+                #st_ident{data:[0;#st_size]}
+            }
+
+            #fn_impl_token
+        }
+    });
 
     // eprintln!("token_stream:\n{:#?}",token_stream);
     
@@ -69,14 +90,132 @@ fn impl_user_define_bit_width(st: &mut syn::ItemStruct)->syn::Result<proc_macro2
     Ok(token_stream)
 }
 
+fn impl_st_fn_geter_seter(st:&StructVisitor)->syn::Result<proc_macro2::TokenStream>{
+    let mut ret = proc_macro2::TokenStream::new();
+
+    let mut idx_off = 0;
+    for (name,size,ty) in st.fields_seq.iter(){
+        let seter_name = format!("set_{}",name);
+        let seter_ident = syn::Ident::new(&seter_name, proc_macro2::Span::call_site());
+        let geter_name = format!("get_{}",name);
+        let geter_ident = syn::Ident::new(&geter_name, proc_macro2::Span::call_site());
+        let ty_ident = syn::Ident::new(ty, proc_macro2::Span::call_site());
+        ret.extend(quote::quote! {
+            pub fn #seter_ident(&mut self,input:#ty_ident){
+                // println!("seter");
+                let mut off_byte = #idx_off / 8;
+                let mut off_bit = #idx_off % 8;
+                let flag = off_bit == 0;
+                let mut size = #size;
+                let mut data_off = 0;
+
+                let mut set_byte = self.data[off_byte];
+                if !flag{
+                    set_byte = set_byte & ((1 << off_bit) -1);
+                    while size > 0 && off_bit !=0 && off_bit != 8{
+                        let tmp = ((input as u8) & (1 << data_off)) << (off_bit-data_off);
+                        set_byte += tmp;
+                        off_bit +=1;
+                        data_off+=1;
+                        size -= 1;
+                    }
+                    self.data[off_byte] = set_byte;
+                    
+                    off_byte+=1;
+                }
+                
+                while size / 8 >0{
+                    set_byte = (input >> data_off) as u8;
+                    self.data[off_byte] = set_byte;
+                    data_off +=8;
+                    off_byte+=1;
+                    size -=8;
+                }
+                if size == 0{
+                    return;
+                }
+
+                set_byte = self.data[off_byte];
+                set_byte = set_byte - (set_byte & ( (1 << (data_off % 8)) - 1 ));
+                while size<8 && size>0{
+                    set_byte += (input >> data_off) as u8 & 1;
+
+                    data_off +=1;
+                    size -=1;
+                }
+                
+            }
+            pub fn #geter_ident(&self)->#ty_ident{
+                // println!("geter");
+                let mut off_byte = #idx_off / 8;
+                let mut off_bit = #idx_off % 8;
+                let flag = off_bit == 0;
+                let mut size = #size;
+                let mut ret:#ty_ident = 0;
+                let mut data_off = 0;
+
+                if !flag{
+                    while size > 0 && off_bit !=0 && off_bit != 8{
+                        let data_sli = self.data[off_byte];
+                        ret += (((data_sli & (1 << off_bit))) >> (off_bit - data_off))as #ty_ident;
+
+                        off_bit += 1;
+                        data_off+=1;
+                        size-=1;
+                    }
+                    off_byte += 1;
+                }
+
+                while size / 8 > 0{
+                    let data_sli = self.data[off_byte];
+                    ret += (data_sli as #ty_ident) << data_off;
+
+                    off_byte += 1;
+                    data_off+=8;
+                    size -= 8;
+                }
+
+                while size % 8 >0{
+                    let data_sli = self.data[off_byte];
+                    ret += ((data_sli & (1 <<data_off % 8)) as #ty_ident) << data_off;
+
+
+                    data_off += 1;
+                    size -=1;
+                }
+
+
+                ret
+            }
+
+        });
+
+        idx_off += *size as usize;
+    }
+
+
+    Ok(ret)
+}
+
+fn get_function_param_ty(size:u8)->Result<String,String>{
+    match size{
+        1..=8 => Ok("u8".to_string()),
+        9..=16 => Ok("u16".to_string()),
+        17..=32 =>Ok("u32".to_string()),
+        33..=64 =>Ok("u64".to_string()),
+        _ => Err("field size must between 1 to 64 ".to_string()),
+    }
+}
+
 struct StructVisitor{
-    fields_seq:Vec<(String,u8)>,
+    fields_seq:Vec<(String,u8,String)>,
+    size:usize,
     err:Option<syn::Error>,
 }
 
 impl StructVisitor{
     fn new()->Self{
-        StructVisitor { fields_seq: vec![],err:None }
+        StructVisitor { fields_seq: vec![], size:0, err:None }
     }
 }
 
@@ -105,15 +244,23 @@ impl syn::visit_mut::VisitMut for StructVisitor{
                 }
             }
             let ty_size:u8 = ty.chars().skip(1).collect::<String>().parse().unwrap();
-            self.fields_seq.push((name,ty_size));
-            str_size += ty_size as u32;
+            let field_ty;
+            match get_function_param_ty(ty_size){
+                Ok(s) => field_ty = s,
+                Err(s) =>{
+                    self.err = Some(syn::Error::new_spanned(field, s));
+                    return;
+                }
+            }
+            self.fields_seq.push((name,ty_size,field_ty));
+            str_size += ty_size as usize;
         }
 
         if str_size %8 != 0{
-            self.err = Some(syn::Error::new_spanned(i, "fields size must be mutltiple 8"));
+            self.err = Some(syn::Error::new_spanned(i, "fields size must be multiple 8"));
             return;
         }
-
+        self.size = str_size;
         syn::visit_mut::visit_fields_named_mut(self, i);
     }
 }
