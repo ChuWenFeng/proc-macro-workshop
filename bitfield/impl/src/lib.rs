@@ -93,6 +93,94 @@ fn impl_user_define_bit_width(st: &mut syn::ItemStruct)->syn::Result<proc_macro2
 fn impl_st_fn_geter_seter(st:&StructVisitor)->syn::Result<proc_macro2::TokenStream>{
     let mut ret = proc_macro2::TokenStream::new();
 
+    ret.extend(quote::quote! {
+        fn seter_to_idx(&mut self,idx_off:usize,size:usize,input:u64){
+            // println!("seter");
+            let mut off_byte:usize = idx_off / 8;
+            let mut off_bit:usize = idx_off % 8;
+            let flag = off_bit == 0;
+            let mut size = size;
+            let mut data_off:usize = 0;
+
+            let mut set_byte:u8 = self.data[off_byte];
+            if !flag{
+                set_byte = set_byte & ((1 << off_bit) -1);
+                while size > 0 && off_bit !=0 && off_bit != 8{
+                    let tmp:u8 = ((input as u8) & (1 << data_off)) << (off_bit-data_off);
+                    set_byte += tmp;
+                    off_bit +=1;
+                    data_off+=1;
+                    size -= 1;
+                }
+                self.data[off_byte] = set_byte;
+                
+                off_byte+=1;
+            }
+            
+            while size / 8 >0{
+                set_byte = (input >> data_off) as u8;
+                self.data[off_byte] = set_byte;
+                data_off +=8;
+                off_byte+=1;
+                size -=8;
+            }
+            if size == 0{
+                return;
+            }
+
+            set_byte = self.data[off_byte];
+            set_byte = set_byte - (set_byte & ( (1 << (data_off % 8)) - 1 ));
+            while size<8 && size>0{
+                set_byte += (input >> data_off) as u8 & 1;
+
+                data_off +=1;
+                size -=1;
+            }
+            
+        }
+        fn geter_to_idx(&self,idx_off:usize,size:usize)->u64{
+            // println!("geter");
+            let mut off_byte:usize = idx_off / 8;
+            let mut off_bit:usize = idx_off % 8;
+            let flag = off_bit == 0;
+            let mut size = size;
+            let mut ret:u64 = 0;
+            let mut data_off = 0;
+
+            if !flag{
+                while size > 0 && off_bit !=0 && off_bit != 8{
+                    let data_sli = self.data[off_byte];
+                    ret += (((data_sli & (1 << off_bit))) >> (off_bit - data_off))as u64;
+
+                    off_bit += 1;
+                    data_off+=1;
+                    size-=1;
+                }
+                off_byte += 1;
+            }
+
+            while size / 8 > 0{
+                let data_sli = self.data[off_byte];
+                ret += (data_sli as u64) << data_off;
+
+                off_byte += 1;
+                data_off+=8;
+                size -= 8;
+            }
+
+            while size % 8 >0{
+                let data_sli = self.data[off_byte];
+                ret += ((data_sli & (1 <<data_off % 8)) as u64) << data_off;
+
+                data_off += 1;
+                size -=1;
+            }
+
+            ret
+        }
+
+    });
+
     let mut idx_off = 0;
     for (name,size,ty) in st.fields_seq.iter(){
         let seter_name = format!("set_{}",name);
@@ -103,89 +191,12 @@ fn impl_st_fn_geter_seter(st:&StructVisitor)->syn::Result<proc_macro2::TokenStre
         ret.extend(quote::quote! {
             pub fn #seter_ident(&mut self,input:#ty_ident){
                 // println!("seter");
-                let mut off_byte = #idx_off / 8;
-                let mut off_bit = #idx_off % 8;
-                let flag = off_bit == 0;
-                let mut size = #size;
-                let mut data_off = 0;
-
-                let mut set_byte = self.data[off_byte];
-                if !flag{
-                    set_byte = set_byte & ((1 << off_bit) -1);
-                    while size > 0 && off_bit !=0 && off_bit != 8{
-                        let tmp = ((input as u8) & (1 << data_off)) << (off_bit-data_off);
-                        set_byte += tmp;
-                        off_bit +=1;
-                        data_off+=1;
-                        size -= 1;
-                    }
-                    self.data[off_byte] = set_byte;
-                    
-                    off_byte+=1;
-                }
-                
-                while size / 8 >0{
-                    set_byte = (input >> data_off) as u8;
-                    self.data[off_byte] = set_byte;
-                    data_off +=8;
-                    off_byte+=1;
-                    size -=8;
-                }
-                if size == 0{
-                    return;
-                }
-
-                set_byte = self.data[off_byte];
-                set_byte = set_byte - (set_byte & ( (1 << (data_off % 8)) - 1 ));
-                while size<8 && size>0{
-                    set_byte += (input >> data_off) as u8 & 1;
-
-                    data_off +=1;
-                    size -=1;
-                }
+                self.seter_to_idx(#idx_off,#size as usize,input as u64);
                 
             }
             pub fn #geter_ident(&self)->#ty_ident{
                 // println!("geter");
-                let mut off_byte = #idx_off / 8;
-                let mut off_bit = #idx_off % 8;
-                let flag = off_bit == 0;
-                let mut size = #size;
-                let mut ret:#ty_ident = 0;
-                let mut data_off = 0;
-
-                if !flag{
-                    while size > 0 && off_bit !=0 && off_bit != 8{
-                        let data_sli = self.data[off_byte];
-                        ret += (((data_sli & (1 << off_bit))) >> (off_bit - data_off))as #ty_ident;
-
-                        off_bit += 1;
-                        data_off+=1;
-                        size-=1;
-                    }
-                    off_byte += 1;
-                }
-
-                while size / 8 > 0{
-                    let data_sli = self.data[off_byte];
-                    ret += (data_sli as #ty_ident) << data_off;
-
-                    off_byte += 1;
-                    data_off+=8;
-                    size -= 8;
-                }
-
-                while size % 8 >0{
-                    let data_sli = self.data[off_byte];
-                    ret += ((data_sli & (1 <<data_off % 8)) as #ty_ident) << data_off;
-
-
-                    data_off += 1;
-                    size -=1;
-                }
-
-
-                ret
+                self.geter_to_idx(#idx_off,#size as usize) as #ty_ident
             }
 
         });
